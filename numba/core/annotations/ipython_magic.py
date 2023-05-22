@@ -29,7 +29,8 @@ class NumbaMagics(Magics):
         args = magic_arguments.parse_argstring(self.numba, line)
         if args.annotate:
             function_names = self._get_function_names(cell)
-            code = self._preprocess_cell(cell)
+            cell = self._preprocess_cell(cell)
+            code = cell
             spec = self._build_module_spec(line, code)
 
             # Import the module
@@ -40,12 +41,38 @@ class NumbaMagics(Magics):
             numba_functions = self._get_jitted_functions(
                 numba_module, function_names
             )
-            ann = Annotate(numba_functions[0])
+            lines = self._get_lines(cell)
+            line_numbers = range(1, len(lines) + 1)
+            python_indents = self._get_python_indents(lines, line_numbers)
+            python_lines = self._get_python_lines(lines, line_numbers)
+            # print(python_lines)
+            ann = Annotate(
+                numba_functions[0],
+                python_lines=python_lines,
+                python_indent=python_indents
+            )
             return ann
+        return cell
 
     def _preprocess_cell(self, cell):
         cell = cell.strip()
         return cell
+
+    def _get_lines(self, cell):
+        lines = [s for s in cell.split('\n')]
+        return lines
+
+    def _get_python_lines(self, lines, line_numbers):
+        # print(lines)
+        # print(line_numbers)
+        python_lines = list(zip(line_numbers, map(lambda l: l.strip(), lines)))
+        # print(python_lines)
+        return python_lines
+
+    def _get_python_indents(self, lines, line_numbers):
+        spaces = map(lambda s: len(s) - len(s.lstrip()), lines)
+        indents = { line:space for (line,space) in zip(line_numbers, spaces) }
+        return indents
 
     def _get_function_names(self, cell):
         return re.findall(r"def (.*)\(", cell)[0]
