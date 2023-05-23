@@ -110,3 +110,10 @@ class NumbaMagics(Magics):
             except KeyError:
                 msg = "'module' object has no attribute '%s'" % k
                 raise AttributeError(msg)
+
+    def _parse_llvm_lines(self, jitted_function):
+        pass
+
+    def _get_llvm_lines(self, jitted_function):
+        # code = jitted_function.inspect_llvm()
+        pass
