@@ -62,12 +62,21 @@ class BaseLower(object):
 
         # debuginfo def location
         self.defn_loc = self._compute_def_location()
-
-        directives_only = self.flags.dbg_directives_only
+        try:
+            directives_only = self.flags.dbg_directives_only
+        except AttributeError:
+            directives_only = None
         self.debuginfo = dibuildercls(module=self.module,
                                       filepath=func_ir.loc.filename,
                                       cgctx=context,
                                       directives_only=directives_only)
+
+        self.llvm_ir_for_python_line = {}
+        self.fndesc.global_dict = {"python_llvm_ir_lines":{}, "python_llvm_ir_lines2": {}}
+        self._prev_line = None
+        self._next_line = None
+        self._prev_block = None
+        self._next_block = None
 
         # Subclass initialization
         self.init()
@@ -130,7 +139,10 @@ class BaseLower(object):
         # improve the quality of the debug experience. 'alwaysinline' functions
         # cannot have inlining disabled.
         attributes = self.builder.function.attributes
-        full_debug = self.flags.debuginfo and not self.flags.dbg_directives_only
+        try:
+            full_debug = self.flags.debuginfo and not self.flags.dbg_directives_only
+        except AttributeError:
+            full_debug = None
         if full_debug and 'alwaysinline' not in attributes:
             attributes.add('noinline')
 
@@ -256,7 +268,7 @@ class BaseLower(object):
             bname = "B%s" % offset
             self.blkmap[offset] = self.function.append_basic_block(bname)
 
-        self.pre_lower()
+        # self.pre_lower()
         # pre_lower() may have changed the current basic block
         entry_block_tail = self.builder.basic_block
 
@@ -264,12 +276,24 @@ class BaseLower(object):
             self.fndesc.unique_name))
 
         # Lower all blocks
+        prev_block = None
         for offset, block in sorted(self.blocks.items()):
             bb = self.blkmap[offset]
             self.builder.position_at_end(bb)
             self.debug_print(f"# lower block: {offset}")
             self.lower_block(block)
-        self.post_lower()
+            next_block = block
+            # print("After:\n", str(self.builder.module.functions[0]), end="\n\n***\n\n")
+            if not prev_block and next_block:
+                self.llvm_ir_for_python_line[block.body[0].loc.line] = next_block._dict
+                self.fndesc.global_dict["python_llvm_ir_lines"][block.body[0].loc.line] = next_block._dict
+            if prev_block and next_block:
+                self.llvm_ir_for_python_line[block.body[0].loc.line] = self.diff_llvm_ir_blocks(prev_block._dict, next_block._dict)
+                self.fndesc.global_dict["python_llvm_ir_lines"][block.body[0].loc.line] = self.diff_llvm_ir_blocks(prev_block._dict, next_block._dict)
+            prev_block = block
+        # print(self.llvm_ir_for_python_line)
+        self.fndesc.global_dict["llvm_function_prototype"] = self.parse_llvm_module_function_def()
+        # self.post_lower()
         return entry_block_tail
 
     def lower_block(self, block):
@@ -277,13 +301,72 @@ class BaseLower(object):
         Lower the given block.
         """
         self.pre_block(block)
+        # print(f"BLOCK: {block} {block.body[0].loc.line}")
         for inst in block.body:
+            # print(inst, inst.loc.line, end="*\n")
+            # print("Before:\n", self.parse_llvm_ir_module(self.builder.module))
+            # llvm_ir_module_before = self.parse_llvm_ir_module_blocks(self.builder.module)
             self.loc = inst.loc
             defaulterrcls = partial(LoweringError, loc=self.loc)
-            with new_error_context('lowering "{inst}" at {loc}', inst=inst,
-                                   loc=self.loc, errcls_=defaulterrcls):
-                self.lower_inst(inst)
+            # with new_error_context('lowering "{inst}" at {loc}', inst=inst,
+            #                        loc=self.loc, errcls_=defaulterrcls):
+            self.lower_inst(inst)
+            # print("After:\n", self.parse_llvm_ir_module_blocks(),end='\n\n')
+            llvm_ir_module_after = self.parse_llvm_ir_module_blocks()
+            # print(llvm_ir_module_after, end='\n\n') #-
+            # print("After:\n", str(self.builder.module.functions[0]), end="\n\n***\n\n")
+            block._dict = llvm_ir_module_after
+            # print(llvm_ir_module_before)
+            # print(self.builder.module.functions[0].type.pointee) #-
+            # print(self.builder.module.functions[0].type.pointee.return_type)
+            # print(llvm_ir_module_after, end='\n\n') #-
+            # print(self.parse_llvm_module_function_def(self.builder.module))
+            # print(self.builder.module.functions[0].args)
         self.post_block(block)
+
+    def parse_llvm_module_function_def(self):
+        import re
+        s1 = str(self.builder.module.functions[0])
+        result = re.findall(r'define(.*)\)', s1)
+        s2 = "define"+result[0]+")"
+        s3 = s2.replace(self.builder.module.functions[0].name, self.builder.module.name.split('$')[0])
+        s4 = s3.replace(', {i8*, i32, i8*, i8*, i32}** noalias nocapture %"excinfo"', "")
+        return s4
+        
+
+    def parse_llvm_ir_module_blocks(self):
+        import re
+        s = str(self.builder.module.functions[0])
+        # x="define"+str(self.builder.module.functions[0].type.pointee.return_type) + \
+        # f"@{self.builder.module.functions[0].name}"+f"({[str(x.name)+str(x.type) for x in ]})"
+        result = "\n".join([x for x in s.split('\n') if "define" not in x and x not in ['{','}']])
+        # result = re.findall(r'\{\n([^{}]+)\n\}', s)
+        self.block_dict = {}
+        key = None
+        for text in result.strip().split('\n'):
+            if text[-1]==':':
+                key = text[:-1]
+                self.block_dict[key] = []
+            else:
+                if key:
+                    llvm_instr = text.strip()
+                    self.block_dict[key].append(llvm_instr)
+                else:
+                    continue
+        return self.block_dict
+
+    def diff_llvm_ir_blocks(self, ir_block1, ir_block2):
+        # return { k : ir_block2[k] for k in set(ir_block2) - set(ir_block1) }
+        # { k : [ir_block2[k][i] for i in range(len(ir_block2[k])) if x not in ir_block1[k]] for k in set(ir_block2) - set(ir_block1) }
+        diff = { k : [ir_block2[k][i] for i in range(len(ir_block2[k])) if ir_block2[k][i] not in ir_block1[k]] for k in set(ir_block1) }
+        # return { k : diff[k] for k in diff if diff[k]}
+        return diff
+
+    def sum_llvm_ir_blocks(self, ir_block1, ir_block2):
+        sum_ = {}
+        for k in ir_block1:
+            sum_[k] = ir_block1[k]+ir_block2[k]
+        return sum_
 
     def create_cpython_wrapper(self, release_gil=False):
         """
@@ -310,11 +393,14 @@ class BaseLower(object):
     def setup_function(self, fndesc):
         # Setup function
         self.function = self.context.declare_function(self.module, fndesc)
-        if self.flags.dbg_optnone:
-            attrset = self.function.attributes
-            if "alwaysinline" not in attrset:
-                attrset.add("optnone")
-                attrset.add("noinline")
+        try:
+            if self.flags.dbg_optnone:
+                attrset = self.function.attributes
+                if "alwaysinline" not in attrset:
+                    attrset.add("optnone")
+                    attrset.add("noinline")
+        except AttributeError:
+            pass
         self.entry_block = self.function.append_basic_block('entry')
         self.builder = IRBuilder(self.entry_block)
         self.call_helper = self.call_conv.init_call_helper(self.builder)
@@ -367,8 +453,10 @@ class Lower(BaseLower):
         the emission of debug information."""
         if self.flags is None:
             return False
-
-        return self.flags.debuginfo and not self.flags.dbg_directives_only
+        try:
+            return self.flags.debuginfo and not self.flags.dbg_directives_only
+        except AttributeError:
+            return False
 
     def _find_singly_assigned_variable(self):
         func_ir = self.func_ir
@@ -455,6 +543,10 @@ class Lower(BaseLower):
             pass
 
     def lower_inst(self, inst):
+        # before = str(self.builder.module)
+        self._next_line = inst.loc.line
+        before = self.parse_llvm_ir_module_blocks()
+        # print(inst, inst.loc.line, end="*\n")
         # Set debug location for all subsequent LL instructions
         self.debuginfo.mark_location(self.builder, self.loc.line)
         self.debug_print(str(inst))
@@ -592,6 +684,53 @@ class Lower(BaseLower):
 
         else:
             raise NotImplementedError(type(inst))
+        
+        # after = str(self.builder.module)
+        # print(f"LINE: {self.loc.get_lines()}")
+        # print(f"Before:\n{before}\n")
+        # print(f"After:\n{before}\n")
+        after = self.parse_llvm_ir_module_blocks()
+        if self._prev_line == None:
+            # print(f"For python line {inst.loc.line}: {inst}")
+            # print("Before: ", before)
+            # print("After: ", after)
+            # diff = self.diff_llvm_ir_blocks(before, after)
+            # print("Difference: ", diff, end='\n\n')
+            self.fndesc.global_dict["python_llvm_ir_lines2"][inst.loc.line] = after
+            # print("Here0")
+            # print('**************',self.fndesc.global_dict["python_llvm_ir_lines2"],'******************')
+            # print('================',self._prev_line, self._next_line, '=================')
+            self._prev_line = inst.loc.line
+            self._prev_block = after
+            return
+        self._next_block = after
+        diff = self.diff_llvm_ir_blocks(self._prev_block, self._next_block)
+        # print(before, after, diff)
+
+        # print(f"For python line {inst.loc.line}: {inst}")
+        # print("Before: ", before)
+        # print("After: ", after)
+        # print("Difference: ", diff, end='\n\n')
+        if self._prev_line == self._next_line:
+            # print("HERE\n")
+            self.fndesc.global_dict["python_llvm_ir_lines2"][inst.loc.line] = self.sum_llvm_ir_blocks(
+                self.fndesc.global_dict["python_llvm_ir_lines2"][inst.loc.line],
+                diff,
+            )
+            # if (inst.loc.line not in self.fndesc.global_dict["python_llvm_ir_lines2"]):
+            #     self.fndesc.global_dict["python_llvm_ir_lines2"][inst.loc.line] = after
+            # elif any([diff[k] for k in diff]):
+            #     self.fndesc.global_dict["python_llvm_ir_lines2"][inst.loc.line] = after
+                # self.fndesc.global_dict["python_llvm_ir_lines2"][inst.loc.line].update(**diff)
+        elif self._prev_line != self._next_line: # on a new python line
+            # print("HERE2\n")
+            self.fndesc.global_dict["python_llvm_ir_lines2"][inst.loc.line] = diff
+        
+        # print("After:\n", str(self.builder.module.functions[0]), end="\n\n***\n\n")
+        # print('**************',self.fndesc.global_dict["python_llvm_ir_lines2"],'******************')
+        # print('================',self._prev_line, self._next_line, '=================')
+        self._prev_line = inst.loc.line
+        self._prev_block = after
 
     def lower_setitem(self, target_var, index_var, value_var, signature):
         target = self.loadvar(target_var.name)
@@ -754,6 +893,9 @@ class Lower(BaseLower):
         rhs = self.loadvar(rhs.name)
 
         # Convert argument to match
+        # print(expr == list(self.fndesc.calltypes.keys())[0])
+        # print(expr, "in", set(self.fndesc.calltypes), "returns", expr in set(self.fndesc.calltypes))
+        # print(expr == list(self.fndesc.calltypes.keys())[0])
         signature = self.fndesc.calltypes[expr]
         lhs = self.context.cast(self.builder, lhs, lty, signature.args[0])
         rhs = self.context.cast(self.builder, rhs, rty, signature.args[1])
