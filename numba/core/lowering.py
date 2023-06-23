@@ -62,10 +62,11 @@ class BaseLower(object):
 
         # debuginfo def location
         self.defn_loc = self._compute_def_location()
-        try:
-            directives_only = self.flags.dbg_directives_only
-        except AttributeError:
-            directives_only = None
+        directives_only = self.flags.dbg_directives_only
+        # try:
+        #     directives_only = self.flags.dbg_directives_only
+        # except AttributeError:
+        #     directives_only = None
         self.debuginfo = dibuildercls(module=self.module,
                                       filepath=func_ir.loc.filename,
                                       cgctx=context,
@@ -139,10 +140,11 @@ class BaseLower(object):
         # improve the quality of the debug experience. 'alwaysinline' functions
         # cannot have inlining disabled.
         attributes = self.builder.function.attributes
-        try:
-            full_debug = self.flags.debuginfo and not self.flags.dbg_directives_only
-        except AttributeError:
-            full_debug = None
+        full_debug = self.flags.debuginfo and not self.flags.dbg_directives_only
+        # try:
+        #     full_debug = self.flags.debuginfo and not self.flags.dbg_directives_only
+        # except AttributeError:
+        #     full_debug = None
         if full_debug and 'alwaysinline' not in attributes:
             attributes.add('noinline')
 
@@ -268,7 +270,7 @@ class BaseLower(object):
             bname = "B%s" % offset
             self.blkmap[offset] = self.function.append_basic_block(bname)
 
-        # self.pre_lower()
+        self.pre_lower() #HEREHERE
         # pre_lower() may have changed the current basic block
         entry_block_tail = self.builder.basic_block
 
@@ -293,7 +295,7 @@ class BaseLower(object):
             prev_block = block
         # print(self.llvm_ir_for_python_line)
         self.fndesc.global_dict["llvm_function_prototype"] = self.parse_llvm_module_function_def()
-        # self.post_lower()
+        self.post_lower() # HEREHERE
         return entry_block_tail
 
     def lower_block(self, block):
@@ -393,14 +395,19 @@ class BaseLower(object):
     def setup_function(self, fndesc):
         # Setup function
         self.function = self.context.declare_function(self.module, fndesc)
-        try:
-            if self.flags.dbg_optnone:
-                attrset = self.function.attributes
-                if "alwaysinline" not in attrset:
-                    attrset.add("optnone")
-                    attrset.add("noinline")
-        except AttributeError:
-            pass
+        if self.flags.dbg_optnone:
+            attrset = self.function.attributes
+            if "alwaysinline" not in attrset:
+                attrset.add("optnone")
+                attrset.add("noinline")
+        # try:
+        #     if self.flags.dbg_optnone:
+        #         attrset = self.function.attributes
+        #         if "alwaysinline" not in attrset:
+        #             attrset.add("optnone")
+        #             attrset.add("noinline")
+        # except AttributeError:
+        #     pass
         self.entry_block = self.function.append_basic_block('entry')
         self.builder = IRBuilder(self.entry_block)
         self.call_helper = self.call_conv.init_call_helper(self.builder)
@@ -453,10 +460,11 @@ class Lower(BaseLower):
         the emission of debug information."""
         if self.flags is None:
             return False
-        try:
-            return self.flags.debuginfo and not self.flags.dbg_directives_only
-        except AttributeError:
-            return False
+        return self.flags.debuginfo and not self.flags.dbg_directives_only
+        # try:
+        #     return self.flags.debuginfo and not self.flags.dbg_directives_only
+        # except AttributeError:
+        #     return False
 
     def _find_singly_assigned_variable(self):
         func_ir = self.func_ir
@@ -558,7 +566,7 @@ class Lower(BaseLower):
             # that this is the arg
             if isinstance(inst.value, ir.Arg):
                 # NOTE: debug location is the `def <func>` line
-                self.debuginfo.mark_location(self.builder, self.defn_loc.line)
+                # self.debuginfo.mark_location(self.builder, self.defn_loc.line)
                 argidx = inst.value.index + 1 # args start at 1
             self.storevar(val, inst.target.name, argidx=argidx)
 
@@ -1643,10 +1651,10 @@ class Lower(BaseLower):
                 lltype = self.context.get_value_type(fetype)
                 sizeof = self.context.get_abi_sizeof(lltype)
                 datamodel = self.context.data_model_manager[fetype]
-                self.debuginfo.mark_variable(self.builder, ptr, name=name,
-                                             lltype=lltype, size=sizeof,
-                                             line=loc.line, datamodel=datamodel,
-                                             argidx=argidx)
+                # self.debuginfo.mark_variable(self.builder, ptr, name=name,
+                #                              lltype=lltype, size=sizeof,
+                #                              line=loc.line, datamodel=datamodel,
+                #                              argidx=argidx)
             else:
                 self.builder.store(value, ptr)
 
@@ -1694,10 +1702,10 @@ class Lower(BaseLower):
             # splatted args from the CC is dealt with.
             if name not in self.func_ir.arg_names:
                 sizeof = self.context.get_abi_sizeof(lltype)
-                self.debuginfo.mark_variable(self.builder, aptr, name=name,
-                                             lltype=lltype, size=sizeof,
-                                             line=self.loc.line,
-                                             datamodel=datamodel,)
+                # self.debuginfo.mark_variable(self.builder, aptr, name=name,
+                #                              lltype=lltype, size=sizeof,
+                #                              line=self.loc.line,
+                #                              datamodel=datamodel,)
         return aptr
 
     def incref(self, typ, val):
